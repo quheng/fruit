@@ -89,6 +89,14 @@ int dely1[]={
 		 20,20,40,10,10,10,10,20,20,20,10,50,10,10,10,10,20,20,20,10,10,20,20,20,20,20,10,20,20,20,20,20,10,50,30,0,
 };
 
+int freq2[]={
+		 784,0
+		 };
+
+
+int dely2[]={
+		 25,0
+		 };
 void interrupt normal()
 {
 	static int no,j;
@@ -107,7 +115,52 @@ void interrupt normal()
 	else no=0;
 }
 
+void interrupt th()
+{
+	static int no,j;
+	if (freq0[no]!=-1)
+	{
+		if (j==0) sound(freq0[no]);
+		if (j<dely0[no]/3)
+		{
+			j++;
+			return;
+		}
+		nosound();
+		no++;
+		j=0;
+	}
+	else no=0;
+}
+
+void interrupt aim()
+{
+	static int no,j;
+	if (freq2[no]!=-1)
+	{
+		if (j==0) sound(freq2[no]);
+		if (j<dely2[no]/3)
+		{
+			j++;
+			return;
+		}
+		nosound();
+		no++;
+		j=0;
+	}
+	else no=0;
+}
+
 
 void setbgm(){
 	setvect(0x1c,normal);
 }
+
+void setaim(){
+	setvect(0x1c,aim);
+}
+
+void setth(){
+	setvect(0x1c,th);
+}
+

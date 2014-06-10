@@ -1,138 +1,198 @@
+/****************************************************/
+/* VESA 24-bit color demo in Watcom C               */
+/* copyright (C) Black White.  Mar 1, 2014          */
+/* email: iceman@zju.edu.cn                         */
+/* web: http://blackwhite.8866.org/bhh              */
+/****************************************************/
+#include <graphics.h>
+#include <stdio.h>
 
-#include   <stdio.h>
-#include   <stdlib.h>
-#include   <fcntl.h>
-#include   <dos.h>
-#include   <process.h>
-#include   <bios.h>
-#include   <graphics.h> 
-#pragma pack(1); 
+volatile int stop=0, dx=1, dy=1;
+#define TICKS_TO_CHANGE_POSITION 5
+#define TICKS_TO_CHANGE_MANDEL ((TICKS_TO_CHANGE_POSITION)*50)
+#define TICKVARS 10
+volatile int *ptickvar[TICKVARS]={NULL};
 
+int palettes, mandels;
+byte *ppalette, *pmandel;
 
-/* [%] 重写结构类型 */
-typedef struct tagBITMAPFILEHEADER
+#define BLKSIZE  0x100
+volatile struct 
 {
-    short   bfType;         /* 通常是 'BM' 。现在来看似乎判断OS/2的标识已无什么意义*/
-    long    bfSize;         /* 文件大小，以字节为单位*/
-    short   bfReserved1;    /*保留，必须设置为0*/
-    short   bfReserved2;    /*保留，必须设置为0*/
-    long    bfOffBits;      /*从文件头开始到实际的图象数据之间的字节的偏移量。这*/
-                            /*个参数是非常有用的，因为位图信息头和调色板的长度会*/
-                            /*根据不同情况而变化，可以用这个偏移值迅速的从文件中*/
-                            /*读取到位数据。 */
-} BITMAPFILEHEADER;
+   int x[2], y[2];              // (x[0],y[0]) are the coordinates of block at page 0
+                                // (x[1],y[1]) are the coordinates of block at page 1
+   int ticks_to_change_position, ticks_to_change_mandel, new_created;
+   struct picture *back_img[2]; // 2 background images under the block
+   struct picture *old_img;     // 1 drawing image
+   struct picture *new_img;     // 1 image ready to draw
+} block;
 
-/*信息头结构*/
-typedef struct tagBITMAPINFOHEADER
+
+int get_file_len(FILE *fp)
 {
-    long    biSize;             /* 信息头大小 */
-    long    biWidth;            /* 图像宽度 */
-    long    biHeight;           /* 图像高度 */
-    short   biPlanes;           /* 必须为1 */
-    short   biBitCount;         /* 每像素位数，必须是1, 4, 8或24 */
-    long    biCompression;      /* 压缩方法 */
-    long    biSizeImage;        /* 实际图像大小，必须是4的倍数 */
-    long    biXPelsPerMeter;    /* 水平方向每米像素数 */
-    long    biYPelsPerMeter;    /* 垂直方向每米像素数*/
-    long    biClrUsed;          /* 所用颜色数*/
-    long    biClrImportant;     /* 重要的颜色数 */
-} BITMAPINFOHEADER;
-
-/*调色板*/
-typedef struct tagRGBQUAD
-{
-    char    rgbBlue;   /*蓝色分量*/
-    char    rgbGreen;  /*绿色分量*/
-    char    rgbRed;    /*红色分量*/
-    char    rgbReserved;
-} RGBQUAD;
-
-
-int COLS=640, ROWS=480;		/* 缺省为256色640*480模式 */
-
-/*设置调色板*/
-void set_SVGA_palette(unsigned char r[],  unsigned char g[], unsigned char b[])
-{
-	int  k;
- 	for (k = 0; k < 256; k++) {
-  		outportb(0x03C8,k);
-		outportb(0x03C9,r[k]>>2);
-		outportb(0x03C9,g[k]>>2);
-		outportb(0x03C9,b[k]>>2);
-	}
+   int n;
+   fseek(fp, 0, SEEK_END);
+   n = ftell(fp);
+   fseek(fp, 0, SEEK_SET);
+   return n;
 }
 
-void initial()
+void show_color(byte *p)
 {
-     BITMAPFILEHEADER    FileHeader;
-     BITMAPINFOHEADER    bmiHeader;
-     RGBQUAD             bmiColors[256];
-     unsigned char       buffer[1024], r[256], g[256], b[256];
-     unsigned int	 width, height, linebytes;
-     long		 offset, position;
-     char page_new=0,page_old=0;
-     int i,j,k,n,savemode;
-     FILE *fp;
-
-     if((fp=fopen("bb.bmp","rb"))==NULL) /*判断打开文件是否正确*/
-     {
-	printf("Can't open file: %s",buffer);
-	return;
-     }
-
-     if (fread((char *)&FileHeader, sizeof(FileHeader), 1, fp) != 1) {
-        printf("Can't read file header !\n"); /* 读文件头 */
-        return;
-     }
-     if (FileHeader.bfType != 0X4D42) {  /* BM */
-        fprintf(stderr, "Not a BMP file !\n");
-        return;
-     }
-
-     if (fread((char *)&bmiHeader, sizeof(bmiHeader), 1, fp) != 1) {
-        fprintf(stderr, "Can't read bmiHeader !\n");	/* 读信息头 */
-        return;
-     }
-
-     width = (unsigned int)bmiHeader.biWidth;
-     height = (unsigned int)bmiHeader.biHeight;
-     linebytes = ((width*(long)bmiHeader.biBitCount+31)/32)*4; /* 每行字节数--4的整数倍 */
-
-     if (fread((char *)&bmiColors[0], 4, 256, fp) != 256) { /* 读调色板数据 */
-        fprintf(stderr, "Can't get palette !\n");
-        return;
-     }
-
-
-     /* [%] 增加以下复合语句进行图形模式初始化: */
-     {
-        int driver=VGA, mode=VGAHI;
-        savemode = _mode_index; /* 保存原图形模式 */
-        initgraph(&driver, &mode, "");
-     }
-
-
-     COLS=640;ROWS=480;
-     for (i = 0; i < 256; i++) {
-        r[i] = bmiColors[i].rgbRed;
-        g[i] = bmiColors[i].rgbGreen;
-        b[i] = bmiColors[i].rgbBlue;
-     }
-     set_SVGA_palette(r, g, b);	/* 设置调色板 */
-
-     offset = FileHeader.bfOffBits;
-     fseek(fp, offset, SEEK_SET);    /* 跳到位图数据的起始位置 */
-     for(j=height-1;j>=0;j--) {
-        fread(buffer,linebytes,1,fp);
-        for(i=0,n=0;i<width;i++,n++) {
-           position=j*(long)COLS+i; /*计算要显示点的显存位置*/
-
-           /* [%] 增加以下语句替换后面删除的代码: */
-           memcpy(_vp+position, buffer, linebytes);
-
-        }
-     }
-     fclose(fp);
-     setbgm();
+   int x=0, y=-16, i, j;
+   dword color;
+   char t[10];
+   for(i=0; i<256; i++)
+   {
+      byte c[4];
+      c[0] = p[i*3+2];
+      c[1] = p[i*3+1];
+      c[2] = p[i*3];
+      c[3] = 0;
+      color = *(dword *)c;
+      setcolor(color);
+      y += 16;
+      if(y >= _height)
+      {
+         y = 0;
+         x += 150;
+      }
+      for(j=0; j<16; j++)
+      {
+         line(x, y+j, x+120-1, y+j);
+      }
+      setcolor(0x00FFFFFF);
+      sprintf(t, "%02X", i);
+      outtextxy(x+120, y, t); 
+   }
 }
 
+int read_palette_from_file(byte **pp)
+{
+   int pal_file_len, palettes;
+   byte *pbuf, *p;
+   FILE *fp;
+   fp = fopen("palette.dat", "rb");
+   if(fp == NULL)
+      return 0;
+   pal_file_len = get_file_len(fp);
+   palettes = pal_file_len / 0x300;
+   pbuf = malloc(pal_file_len);
+   fread(pbuf, 1, pal_file_len, fp);
+   fclose(fp);
+   *pp = pbuf;
+   return palettes;
+}
+
+int read_mandel_from_file(byte **pp)
+{
+   int mandel_file_len, mandels;
+   byte *pbuf, *p;
+   FILE *fp;
+   fp = fopen("mandel.dat", "rb");
+   if(fp == NULL)
+      return 0;
+   mandel_file_len = get_file_len(fp);
+   mandels = mandel_file_len / (0x100*0x100);
+   pbuf = malloc(mandel_file_len);
+   fread(pbuf, 1, mandel_file_len, fp);
+   fclose(fp);
+   *pp = pbuf;
+   return mandels;
+}
+
+void show_mandel(int x, int y, byte *pmandel, byte *ppalette)
+{
+   int i, j;
+   byte c[4];
+   dword color;
+   byte (*p)[0x100] = (byte (*)[0x100])pmandel;
+   byte (*pal)[3] = (byte (*)[3])ppalette;
+   for(i=0; i<0x100; i++)
+   {
+      for(j=0; j<0x100; j++)
+      {
+         c[0] = pal[p[i][j]][2];
+         c[1] = pal[p[i][j]][1];
+         c[2] = pal[p[i][j]][0];
+         c[3] = 0;
+         color = *(dword *)c;
+         putpixel(x+j, y+i, color);
+      }
+   }
+}
+
+void build_mandel_in_memory(struct picture *pic, byte *pmandel, byte *ppalette)
+{
+   int i, j;
+   byte c[4];
+   dword color;
+   byte *pbuf = &pic->buffer;
+   byte (*p)[0x100] = (byte (*)[0x100])pmandel;
+   byte (*pal)[3] = (byte (*)[3])ppalette;
+   for(i=0; i<0x100; i++)
+   {
+      for(j=0; j<0x100; j++)
+      {
+         c[0] = pal[p[i][j]][2]; // blue
+         c[1] = pal[p[i][j]][1]; // green
+         c[2] = pal[p[i][j]][0]; // red
+         c[3] = 0;
+         color = *(dword *)c;
+         *(dword *)(pbuf+(i*BLKSIZE+j)*(_color_bits/8)) = color;
+      }
+   }
+   pic->picwidth = pic->picheight = BLKSIZE;
+   pic->bpp = _color_bits;
+}
+
+int load_24bit_bmp(int x, int y, char *filename)
+{
+   FILE *fp = NULL;
+   byte *p = NULL; /* pointer to a line of bmp data */
+   byte *vp = _vp + (_active_page*_page_gap + y*_width + x) * (_color_bits/8);
+   dword width, height, bmp_data_offset, bytes_per_line, offset;
+   int i;
+   p = malloc(1024L * 3);  /* memory for holding a line of bmp data */
+   if(p == NULL)  /* cannot allocate enough memory for drawing 1 line */
+      goto display_bmp_error;
+   fp = fopen(filename, "rb");
+   if(fp == NULL) /* cannot open bmp file */
+      goto display_bmp_error;
+   fread(p, 1, 0x36, fp);     /* read BMP head */
+   if(*(word *)p != 0x4D42)   /* check BMP signature */
+      goto display_bmp_error; /* not a BMP file */
+   if(*(word *)(p+0x1C) != 24)
+      goto display_bmp_error; /* not a 24-bit-color BMP file */
+   width = *(dword *)(p+0x12);
+   height = *(dword *)(p+0x16);
+   bmp_data_offset = *(dword *)(p+0x0A);
+   fseek(fp, bmp_data_offset, SEEK_SET); /* skip BMP head */
+   bytes_per_line = (width * 3 + 3) / 4 * 4; /* must be multiple of 4 */
+   for(i=height-1; i>=0; i--)          /* draw from bottom to top */
+   {
+      fread(p, 1, bytes_per_line, fp); /* read a line of bmp data */
+      offset = i * 1024 * 3;
+      memcpy(vp+offset, p, width*3);
+   }
+   free(p);
+   fclose(fp);
+   return 1;
+   display_bmp_error:
+   if(p != NULL)
+      free(p);
+   if(fp != NULL)
+      fclose(fp);
+   return 0;
+}
+
+
+int initial(char *buffer)
+{
+   int driver=0, mode=VESA_1024x768x24bit;
+   palettes = read_palette_from_file(&ppalette);
+   mandels = read_mandel_from_file(&pmandel);
+   initgraph(&driver, &mode, "");
+   load_24bit_bmp(0, 0, buffer);
+   return;
+}
